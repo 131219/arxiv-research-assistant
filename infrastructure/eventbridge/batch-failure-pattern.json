@@ -1,0 +1,10 @@
+{
+  "source": ["aws.batch"],
+  "detail-type": ["Batch Job State Change"],
+  "detail": {
+    "status": ["FAILED"],
+    "jobQueue": [
+      "arn:aws:batch:us-east-1:123456789012:job-queue/arxiv-job-queue"
+    ]
+  }
+}

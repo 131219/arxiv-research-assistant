@@ -1,0 +1,320 @@
+{
+  "Comment": "Process arXiv TAR archives in parallel using AWS Batch.",
+  "StartAt": "GenerateManifest",
+  "States": {
+    "GenerateManifest": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${ManifestParserFunctionArn}",
+        "Payload": {
+          "run_id.$": "$.run_id",
+          "year.$": "$.year",
+          "month.$": "$.month",
+          "archive_limit.$": "$.archive_limit",
+          "skip_completed.$": "$.skip_completed"
+        }
+      },
+      "ResultSelector": {
+        "run_id.$": "$.Payload.run_id",
+        "year.$": "$.Payload.year",
+        "month.$": "$.Payload.month",
+        "manifest_bucket.$": "$.Payload.manifest_bucket",
+        "manifest_key.$": "$.Payload.manifest_key",
+        "archive_count.$": "$.Payload.archive_count",
+        "expected_pdf_count.$": "$.Payload.expected_pdf_count",
+        "total_archive_bytes.$": "$.Payload.total_archive_bytes"
+      },
+      "ResultPath": "$.manifest_generation",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Next": "ProcessArchives"
+    },
+    "ProcessArchives": {
+      "Type": "Map",
+      "Label": "ArxivArchives",
+      "ItemReader": {
+        "Resource": "arn:aws:states:::s3:getObject",
+        "ReaderConfig": {
+          "InputType": "JSONL"
+        },
+        "Parameters": {
+          "Bucket.$": "$.manifest_generation.manifest_bucket",
+          "Key.$": "$.manifest_generation.manifest_key"
+        }
+      },
+      "ItemSelector": {
+        "source_bucket.$": "$$.Map.Item.Value.source_bucket",
+        "source_key.$": "$$.Map.Item.Value.source_key",
+        "request_payer.$": "$$.Map.Item.Value.request_payer",
+        "run_id.$": "$$.Map.Item.Value.run_id",
+        "target_year.$": "$$.Map.Item.Value.target_year",
+        "target_month.$": "$$.Map.Item.Value.target_month",
+        "sequence_number.$": "$$.Map.Item.Value.sequence_number",
+        "number_of_items.$": "$$.Map.Item.Value.number_of_items",
+        "tar_md5.$": "$$.Map.Item.Value.tar_md5",
+        "output_bucket.$": "$.output_bucket",
+        "skip_completed.$": "$.skip_completed"
+      },
+      "ItemProcessor": {
+        "ProcessorConfig": {
+          "Mode": "DISTRIBUTED",
+          "ExecutionType": "STANDARD"
+        },
+        "StartAt": "SubmitBatchJob",
+        "States": {
+          "SubmitBatchJob": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::batch:submitJob.sync",
+            "Parameters": {
+              "JobName.$": "States.Format('arxiv-archive-{}', $.sequence_number)",
+              "JobQueue": "${BatchJobQueueArn}",
+              "JobDefinition": "${BatchJobDefinitionName}",
+              "Parameters": {
+                "source_bucket.$": "$.source_bucket",
+                "source_key.$": "$.source_key",
+                "request_payer.$": "$.request_payer",
+                "run_id.$": "$.run_id",
+                "target_year.$": "States.Format('{}', $.target_year)",
+                "target_month.$": "States.Format('{}', $.target_month)",
+                "expected_item_count.$": "States.Format('{}', $.number_of_items)",
+                "tar_md5.$": "$.tar_md5",
+                "output_bucket.$": "$.output_bucket",
+                "skip_completed.$": "States.Format('{}', $.skip_completed)"
+              }
+            },
+            "Retry": [
+              {
+                "ErrorEquals": [
+                  "Batch.AWSBatchException",
+                  "States.TaskFailed"
+                ],
+                "IntervalSeconds": 20,
+                "MaxAttempts": 3,
+                "BackoffRate": 2.0
+              }
+            ],
+            "End": true
+          }
+        }
+      },
+      "MaxConcurrencyPath": "$.max_concurrency",
+      "ToleratedFailureCount": 0,
+      "ResultPath": null,
+      "Next": "ValidateOutputs"
+    },
+    "ValidateOutputs": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${ValidateOutputsFunctionArn}",
+        "Payload": {
+          "run_id.$": "$.run_id",
+          "manifest_bucket.$": "$.manifest_generation.manifest_bucket",
+          "manifest_key.$": "$.manifest_generation.manifest_key",
+          "output_bucket.$": "$.output_bucket"
+        }
+      },
+      "ResultSelector": {
+        "run_id.$": "$.Payload.run_id",
+        "validation_passed.$": "$.Payload.validation_passed",
+        "expected_archive_count.$": "$.Payload.expected_archive_count",
+        "valid_archive_count.$": "$.Payload.valid_archive_count",
+        "invalid_archive_count.$": "$.Payload.invalid_archive_count",
+        "expected_pdf_count.$": "$.Payload.expected_pdf_count",
+        "successful_pdf_count.$": "$.Payload.successful_pdf_count",
+        "failed_pdf_count.$": "$.Payload.failed_pdf_count",
+        "report_bucket.$": "$.Payload.report_bucket",
+        "report_key.$": "$.Payload.report_key"
+      },
+      "ResultPath": "$.validation",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Next": "CheckValidationResult"
+    },
+    "CheckValidationResult": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.validation.validation_passed",
+          "BooleanEquals": true,
+          "Next": "StartBedrockIngestion"
+        }
+      ],
+      "Default": "OutputValidationFailed"
+    },
+    "OutputValidationFailed": {
+      "Type": "Fail",
+      "Error": "OutputValidationFailed",
+      "Cause": "Processed archive outputs failed centralized validation."
+    },
+    "StartBedrockIngestion": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:bedrockagent:startIngestionJob",
+      "Parameters": {
+        "KnowledgeBaseId": "${KnowledgeBaseId}",
+        "DataSourceId": "${DataSourceId}",
+        "Description.$": "States.Format('arXiv ingestion run {}', $.run_id)"
+      },
+      "ResultPath": "$.bedrock_start",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "BedrockAgent.ThrottlingException",
+            "BedrockAgent.InternalServerException"
+          ],
+          "IntervalSeconds": 10,
+          "MaxAttempts": 3,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Next": "WaitForBedrockIngestion"
+    },
+    "WaitForBedrockIngestion": {
+      "Type": "Wait",
+      "Seconds": 30,
+      "Next": "GetBedrockIngestionStatus"
+    },
+    "GetBedrockIngestionStatus": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:bedrockagent:getIngestionJob",
+      "Parameters": {
+        "KnowledgeBaseId": "${KnowledgeBaseId}",
+        "DataSourceId": "${DataSourceId}",
+        "IngestionJobId.$": "$.bedrock_start.IngestionJob.IngestionJobId"
+      },
+      "ResultPath": "$.bedrock_status",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "BedrockAgent.ThrottlingException",
+            "BedrockAgent.InternalServerException"
+          ],
+          "IntervalSeconds": 10,
+          "MaxAttempts": 3,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Next": "CheckBedrockIngestionStatus"
+    },
+    "CheckBedrockIngestionStatus": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.bedrock_status.IngestionJob.Status",
+          "StringEquals": "COMPLETE",
+          "Next": "CheckBedrockDocumentFailures"
+        },
+        {
+          "Variable": "$.bedrock_status.IngestionJob.Status",
+          "StringEquals": "FAILED",
+          "Next": "BedrockIngestionFailed"
+        },
+        {
+          "Variable": "$.bedrock_status.IngestionJob.Status",
+          "StringEquals": "STOPPED",
+          "Next": "BedrockIngestionFailed"
+        }
+      ],
+      "Default": "WaitForBedrockIngestion"
+    },
+    "BedrockIngestionFailed": {
+      "Type": "Fail",
+      "Error": "BedrockIngestionFailed",
+      "Cause": "Amazon Bedrock Knowledge Base ingestion did not complete."
+    },
+    "CheckBedrockDocumentFailures": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.bedrock_status.IngestionJob.Statistics.NumberOfDocumentsFailed",
+          "NumericEquals": 0,
+          "Next": "BuildRunSummary"
+        }
+      ],
+      "Default": "BedrockDocumentsFailed"
+    },
+    "BedrockDocumentsFailed": {
+      "Type": "Fail",
+      "Error": "BedrockDocumentsFailed",
+      "Cause": "Amazon Bedrock completed ingestion, but one or more documents failed."
+    },
+    "BuildRunSummary": {
+      "Type": "Pass",
+      "Parameters": {
+        "run_id.$": "$.run_id",
+        "manifest_bucket.$": "$.manifest_generation.manifest_bucket",
+        "manifest_key.$": "$.manifest_generation.manifest_key",
+        "archive_count.$": "$.manifest_generation.archive_count",
+        "expected_pdf_count.$": "$.manifest_generation.expected_pdf_count",
+        "total_archive_bytes.$": "$.manifest_generation.total_archive_bytes",
+        "max_concurrency.$": "$.max_concurrency",
+        "knowledge_base_id.$": "$.bedrock_status.IngestionJob.KnowledgeBaseId",
+        "data_source_id.$": "$.bedrock_status.IngestionJob.DataSourceId",
+        "ingestion_job_id.$": "$.bedrock_status.IngestionJob.IngestionJobId",
+        "ingestion_status.$": "$.bedrock_status.IngestionJob.Status",
+        "started_at.$": "$.bedrock_status.IngestionJob.StartedAt",
+        "updated_at.$": "$.bedrock_status.IngestionJob.UpdatedAt"
+      },
+      "ResultPath": "$.run_summary",
+      "Next": "WriteRunSummary"
+    },
+    "WriteRunSummary": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${RunSummaryFunctionArn}",
+        "Payload": {
+          "output_bucket.$": "$.output_bucket",
+          "run_id.$": "$.run_id",
+          "run_summary.$": "$.run_summary"
+        }
+      },
+      "ResultSelector": {
+        "bucket.$": "$.Payload.bucket",
+        "key.$": "$.Payload.key",
+        "status.$": "$.Payload.status"
+      },
+      "ResultPath": "$.summary_write",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Next": "PipelineSucceeded"
+    },
+    "PipelineSucceeded": {
+      "Type": "Succeed"
+    }
+  }
+}

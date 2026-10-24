@@ -1,0 +1,410 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Production-style processing infrastructure for the arXiv pipeline:
+  ECR, IAM roles, AWS Batch Fargate compute environment, job queue,
+  and job definition.
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues:
+      - dev
+      - test
+      - prod
+    Description: Deployment environment.
+
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Subnets used by AWS Batch Fargate tasks.
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC used by AWS Batch Fargate tasks.
+
+  MaxVcpus:
+    Type: Number
+    Default: 16
+    MinValue: 1
+    MaxValue: 256
+    Description: Maximum number of Fargate vCPUs available to AWS Batch.
+
+  AssignPublicIp:
+    Type: String
+    Default: ENABLED
+    AllowedValues:
+      - ENABLED
+      - DISABLED
+    Description: >
+      Enable for the current public-subnet development setup.
+      Change to DISABLED when private networking and VPC endpoints are added.
+
+  ImageTag:
+    Type: String
+    Default: validation-v1
+    Description: Immutable Docker image tag used by the Batch job definition.
+
+Resources:
+  ProcessingRepository:
+    Type: AWS::ECR::Repository
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      RepositoryName: !Sub arxiv-pipeline-${Environment}
+      ImageTagMutability: IMMUTABLE
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      EncryptionConfiguration:
+        EncryptionType: AES256
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Expire untagged images after 7 days",
+                "selection": {
+                  "tagStatus": "untagged",
+                  "countType": "sinceImagePushed",
+                  "countUnit": "days",
+                  "countNumber": 7
+                },
+                "action": {
+                  "type": "expire"
+                }
+              }
+            ]
+          }
+      Tags:
+        - Key: Project
+          Value: arxiv-pipeline
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  BatchTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub arxiv-batch-execution-role-${Environment}
+      Description: Allows AWS Batch Fargate to pull images and publish logs.
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ecs-tasks.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Tags:
+        - Key: Project
+          Value: arxiv-pipeline
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  BatchJobRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub arxiv-batch-job-role-${Environment}
+      Description: Least-privilege permissions used by the arXiv processing container.
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ecs-tasks.amazonaws.com
+            Action:
+              - sts:AssumeRole
+
+      Policies:
+        - PolicyName: ArxivSourceReadPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: InspectArxivBucket
+                Effect: Allow
+                Action:
+                  - s3:ListBucket
+                  - s3:GetBucketLocation
+                Resource: arn:aws:s3:::arxiv
+                Condition:
+                  StringLike:
+                    s3:prefix:
+                      - pdf/*
+
+              - Sid: DownloadArxivPdfArchives
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                Resource: arn:aws:s3:::arxiv/pdf/*
+
+        - PolicyName: ArchiveProcessingLedgerPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: UpdateArchiveProcessingLedger
+                Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                Resource:
+                  Fn::ImportValue:
+                    Fn::Sub: arxiv-${Environment}-archive-processing-table-arn
+
+        - PolicyName: ArxivOutputAndValidationPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: WritePipelineOutputs
+                Effect: Allow
+                Action:
+                  - s3:PutObject
+                Resource:
+                  - !Sub
+                    - arn:${AWS::Partition}:s3:::${CorpusBucket}/processed/*
+                    - CorpusBucket:
+                        Fn::ImportValue:
+                          Fn::Sub: arxiv-${Environment}-corpus-bucket-name
+                  - !Sub
+                    - arn:${AWS::Partition}:s3:::${CorpusBucket}/status/*
+                    - CorpusBucket:
+                        Fn::ImportValue:
+                          Fn::Sub: arxiv-${Environment}-corpus-bucket-name
+                  - !Sub
+                    - arn:${AWS::Partition}:s3:::${CorpusBucket}/reports/*
+                    - CorpusBucket:
+                        Fn::ImportValue:
+                          Fn::Sub: arxiv-${Environment}-corpus-bucket-name
+
+              - Sid: ReadArchiveCompletionMarkers
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource:
+                  - !Sub
+                    - arn:${AWS::Partition}:s3:::${CorpusBucket}/status/*
+                    - CorpusBucket:
+                        Fn::ImportValue:
+                          Fn::Sub: arxiv-${Environment}-corpus-bucket-name
+
+              - Sid: ListArchiveOutputs
+                Effect: Allow
+                Action:
+                  - s3:ListBucket
+                Resource:
+                  - !Sub
+                    - arn:${AWS::Partition}:s3:::${CorpusBucket}
+                    - CorpusBucket:
+                        Fn::ImportValue:
+                          Fn::Sub: arxiv-${Environment}-corpus-bucket-name
+                Condition:
+                  StringLike:
+                    s3:prefix:
+                      - processed/*
+                      - status/*
+
+      Tags:
+        - Key: Project
+          Value: arxiv-pipeline
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  BatchSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub Dedicated security group for arxiv Batch Fargate tasks - ${Environment}
+      VpcId: !Ref VpcId
+
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          CidrIp: 0.0.0.0/0
+          Description: Allow outbound access required by Batch processing
+
+      Tags:
+        - Key: Name
+          Value: !Sub arxiv-batch-sg-${Environment}
+        - Key: Project
+          Value: arxiv-pipeline
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  BatchComputeEnvironment:
+    Type: AWS::Batch::ComputeEnvironment
+    Properties:
+      ComputeEnvironmentName: !Sub arxiv-fargate-compute-${Environment}
+      Type: MANAGED
+      State: ENABLED
+      ComputeResources:
+        Type: FARGATE
+        MaxvCpus: !Ref MaxVcpus
+        Subnets: !Ref SubnetIds
+        SecurityGroupIds:
+        - !Ref BatchSecurityGroup
+      
+      Tags:
+        Project: arxiv-pipeline
+        Environment: !Ref Environment
+        ManagedBy: CloudFormation
+
+  BatchJobQueue:
+    Type: AWS::Batch::JobQueue
+    Properties:
+      JobQueueName: !Sub arxiv-job-queue-${Environment}
+      JobQueueType: ECS_FARGATE
+      State: ENABLED
+      Priority: 1
+      ComputeEnvironmentOrder:
+        - Order: 1
+          ComputeEnvironment: !Ref BatchComputeEnvironment
+      Tags:
+        Project: arxiv-pipeline
+        Environment: !Ref Environment
+        ManagedBy: CloudFormation
+
+  BatchJobDefinition:
+    Type: AWS::Batch::JobDefinition
+    Properties:
+      JobDefinitionName: !Sub arxiv-pipeline-job-${Environment}
+      Type: container
+      PlatformCapabilities:
+        - FARGATE
+
+      Parameters:
+        source_bucket: arxiv
+        source_key: ""
+        request_payer: requester
+        run_id: ""
+        target_year: "2026"
+        target_month: "6"
+        expected_item_count: "0"
+        tar_md5: ""
+        output_bucket: ""
+        skip_completed: "true"
+
+      ContainerProperties:
+        Image: !Sub ${ProcessingRepository.RepositoryUri}:${ImageTag}
+
+        Command:
+          - --source-bucket
+          - Ref::source_bucket
+          - --source-key
+          - Ref::source_key
+          - --request-payer
+          - Ref::request_payer
+          - --run-id
+          - Ref::run_id
+          - --target-year
+          - Ref::target_year
+          - --target-month
+          - Ref::target_month
+          - --expected-item-count
+          - Ref::expected_item_count
+          - --tar-md5
+          - Ref::tar_md5
+          - --output-bucket
+          - Ref::output_bucket
+          - --skip-completed
+          - Ref::skip_completed
+
+        JobRoleArn: !GetAtt BatchJobRole.Arn
+        ExecutionRoleArn: !GetAtt BatchTaskExecutionRole.Arn
+
+        Environment:
+          - Name: OUTPUT_BUCKET
+            Value:
+              Fn::ImportValue:
+                Fn::Sub: arxiv-${Environment}-corpus-bucket-name
+
+          - Name: ARCHIVE_PROCESSING_TABLE
+            Value:
+              Fn::ImportValue:
+                Fn::Sub: arxiv-${Environment}-archive-processing-table-name
+
+          - Name: PROCESSOR_VERSION
+            Value: !Ref ImageTag
+
+        ResourceRequirements:
+          - Type: VCPU
+            Value: "1"
+          - Type: MEMORY
+            Value: "2048"
+
+        NetworkConfiguration:
+          AssignPublicIp: !Ref AssignPublicIp
+
+        FargatePlatformConfiguration:
+          PlatformVersion: LATEST
+
+        RuntimePlatform:
+          OperatingSystemFamily: LINUX
+          CpuArchitecture: X86_64
+
+        LogConfiguration:
+          LogDriver: awslogs
+          Options:
+            awslogs-group:
+              Fn::ImportValue:
+                Fn::Sub: arxiv-${Environment}-log-group-name
+            awslogs-region: !Ref AWS::Region
+            awslogs-stream-prefix: batch
+
+      RetryStrategy:
+        Attempts: 1
+
+      Timeout:
+        AttemptDurationSeconds: 1800
+
+      PropagateTags: true
+
+      Tags:
+        Project: arxiv-pipeline
+        Environment: !Ref Environment
+        ManagedBy: CloudFormation
+
+Outputs:
+  ProcessingRepositoryUri:
+    Description: ECR repository URI for the Batch processing image.
+    Value: !GetAtt ProcessingRepository.RepositoryUri
+    Export:
+      Name: !Sub arxiv-${Environment}-processing-repository-uri
+
+  BatchComputeEnvironmentArn:
+    Description: CloudFormation-managed Batch compute environment ARN.
+    Value: !Ref BatchComputeEnvironment
+    Export:
+      Name: !Sub arxiv-${Environment}-batch-compute-environment-arn
+
+  BatchJobQueueArn:
+    Description: CloudFormation-managed Batch job queue ARN.
+    Value: !Ref BatchJobQueue
+    Export:
+      Name: !Sub arxiv-${Environment}-batch-job-queue-arn
+
+  BatchJobDefinitionArn:
+    Description: CloudFormation-managed Batch job definition ARN.
+    Value: !Ref BatchJobDefinition
+    Export:
+      Name: !Sub arxiv-${Environment}-batch-job-definition-arn
+
+  BatchJobRoleArn:
+    Description: IAM role assumed by the processing container.
+    Value: !GetAtt BatchJobRole.Arn
+    Export:
+      Name: !Sub arxiv-${Environment}-batch-job-role-arn
+
+  BatchExecutionRoleArn:
+    Description: IAM role used by Fargate to pull the image and write logs.
+    Value: !GetAtt BatchTaskExecutionRole.Arn
+    Export:
+      Name: !Sub arxiv-${Environment}-batch-execution-role-arn

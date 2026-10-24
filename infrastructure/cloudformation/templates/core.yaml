@@ -1,0 +1,67 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: >
+  Core production infrastructure for the arXiv ingestion and
+  Bedrock Knowledge Base pipeline.
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - test
+      - prod
+    Description: Deployment environment.
+
+  ExistingCorpusBucketName:
+    Type: String
+    Description: >
+      Name of the existing S3 bucket containing processed papers,
+      metadata, manifests, status markers, and reports.
+
+Resources:
+  PipelineNotificationsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "arxiv-pipeline-notifications-${Environment}"
+      DisplayName: !Sub "arXiv Pipeline ${Environment} Notifications"
+      Tags:
+        - Key: Project
+          Value: arxiv-bedrock-kb-pipeline
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  PipelineLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/arxiv-pipeline/${Environment}"
+      RetentionInDays: 30
+      Tags:
+        - Key: Project
+          Value: arxiv-bedrock-kb-pipeline
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: CloudFormation
+
+Outputs:
+  NotificationTopicArn:
+    Description: SNS topic used for workflow completion and failure notifications.
+    Value: !Ref PipelineNotificationsTopic
+    Export:
+      Name: !Sub "arxiv-${Environment}-notification-topic-arn"
+
+  PipelineLogGroupName:
+    Description: Shared CloudWatch log group for pipeline components.
+    Value: !Ref PipelineLogGroup
+    Export:
+      Name: !Sub "arxiv-${Environment}-log-group-name"
+
+  CorpusBucketName:
+    Description: Existing S3 corpus bucket passed into the stack.
+    Value: !Ref ExistingCorpusBucketName
+    Export:
+      Name: !Sub "arxiv-${Environment}-corpus-bucket-name"

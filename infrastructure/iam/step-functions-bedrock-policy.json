@@ -1,0 +1,14 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ManageArxivKnowledgeBaseIngestion",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:StartIngestionJob",
+        "bedrock:GetIngestionJob"
+      ],
+      "Resource": "*"
+    }
+  ]
+}

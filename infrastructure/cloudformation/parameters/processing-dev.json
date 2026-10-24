@@ -1,0 +1,26 @@
+[
+  {
+    "ParameterKey": "Environment",
+    "ParameterValue": "dev"
+  },
+  {
+    "ParameterKey": "SubnetIds",
+    "ParameterValue": "subnet-example1,subnet-example2,subnet-example3,subnet-example4,subnet-example5,subnet-example6"
+  },
+  {
+    "ParameterKey": "VpcId",
+    "ParameterValue": "vpc-xxxxxxxxxxxxxxxxx"
+  },
+  {
+    "ParameterKey": "MaxVcpus",
+    "ParameterValue": "16"
+  },
+  {
+    "ParameterKey": "AssignPublicIp",
+    "ParameterValue": "ENABLED"
+  },
+  {
+    "ParameterKey": "ImageTag",
+    "ParameterValue": "direct-workitem-v3"
+  }
+]

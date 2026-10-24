@@ -1,0 +1,44 @@
+{
+  "jobDefinitionName": "arxiv-pipeline-job",
+  "type": "container",
+  "platformCapabilities": [
+    "FARGATE"
+  ],
+  "containerProperties": {
+    "image": "123456789012.dkr.ecr.us-east-1.amazonaws.com/arxiv-pipeline:latest",
+    "executionRoleArn": "arn:aws:iam::123456789012:role/ecsTaskExecutionRole",
+    "jobRoleArn": "arn:aws:iam::123456789012:role/arxivBatchJobRole",
+    "command": [
+      "--manifest",
+      "/app/manifest.jsonl",
+      "--line-number",
+      "1"
+    ],
+    "resourceRequirements": [
+      {
+        "type": "VCPU",
+        "value": "1"
+      },
+      {
+        "type": "MEMORY",
+        "value": "2048"
+      }
+    ],
+    "networkConfiguration": {
+      "assignPublicIp": "ENABLED"
+    },
+    "runtimePlatform": {
+      "operatingSystemFamily": "LINUX",
+      "cpuArchitecture": "ARM64"
+    },
+    "logConfiguration": {
+      "logDriver": "awslogs"
+    }
+  },
+  "retryStrategy": {
+    "attempts": 1
+  },
+  "timeout": {
+    "attemptDurationSeconds": 1800
+  }
+}

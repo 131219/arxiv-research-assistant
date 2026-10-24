@@ -1,0 +1,10 @@
+[
+    {
+        "ParameterKey": "Environment",
+        "ParameterValue": "dev"
+    },
+    {
+        "ParameterKey": "ExistingCorpusBucketName",
+        "ParameterValue": " arxiv-bedrock-kb-123456789012 "
+    }
+]

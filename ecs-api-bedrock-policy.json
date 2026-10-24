@@ -1,0 +1,30 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "RetrieveFromArxivKnowledgeBase",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:Retrieve"
+      ],
+      "Resource": [
+        "arn:aws:bedrock:us-east-1:123456789012:knowledge-base/YOUR_KB_ID"
+      ]
+    },
+    {
+      "Sid": "InvokeNovaInferenceProfile",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:InvokeModel",
+        "bedrock:InvokeModelWithResponseStream",
+        "bedrock:GetInferenceProfile"
+      ],
+      "Resource": [
+        "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.amazon.nova-2-lite-v1:0",
+        "arn:aws:bedrock:us-east-1::foundation-model/amazon.nova-2-lite-v1:0",
+        "arn:aws:bedrock:us-east-2::foundation-model/amazon.nova-2-lite-v1:0",
+        "arn:aws:bedrock:us-west-2::foundation-model/amazon.nova-2-lite-v1:0"
+      ]
+    }
+  ]
+}

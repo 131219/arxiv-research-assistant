@@ -1,0 +1,51 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AllowAccountManagement",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::123456789012:root"
+      },
+      "Action": [
+        "SNS:GetTopicAttributes",
+        "SNS:SetTopicAttributes",
+        "SNS:AddPermission",
+        "SNS:RemovePermission",
+        "SNS:DeleteTopic",
+        "SNS:Subscribe",
+        "SNS:ListSubscriptionsByTopic",
+        "SNS:Publish"
+      ],
+      "Resource": "arn:aws:sns:us-east-1:123456789012:arxiv-pipeline-alerts"
+    },
+    {
+      "Sid": "AllowStepFunctionsFailureRule",
+      "Effect": "Allow",
+      "Principal": {
+        "Service": "events.amazonaws.com"
+      },
+      "Action": "SNS:Publish",
+      "Resource": "arn:aws:sns:us-east-1:123456789012:arxiv-pipeline-alerts",
+      "Condition": {
+        "ArnEquals": {
+          "aws:SourceArn": "arn:aws:events:us-east-1:123456789012:rule/arxiv-step-functions-failures"
+        }
+      }
+    },
+    {
+      "Sid": "AllowBatchFailureRule",
+      "Effect": "Allow",
+      "Principal": {
+        "Service": "events.amazonaws.com"
+      },
+      "Action": "SNS:Publish",
+      "Resource": "arn:aws:sns:us-east-1:123456789012:arxiv-pipeline-alerts",
+      "Condition": {
+        "ArnEquals": {
+          "aws:SourceArn": "arn:aws:events:us-east-1:123456789012:rule/arxiv-batch-job-failures"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,35 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "WriteProcessedDocuments",
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject"
+      ],
+      "Resource": [
+        "arn:aws:s3:::arxiv-bedrock-kb-123456789012/processed/*"
+      ]
+    },
+    {
+      "Sid": "WriteArchiveStatus",
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject"
+      ],
+      "Resource": [
+        "arn:aws:s3:::arxiv-bedrock-kb-123456789012/status/*"
+      ]
+    },
+    {
+      "Sid": "WriteFailureReports",
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject"
+      ],
+      "Resource": [
+        "arn:aws:s3:::arxiv-bedrock-kb-123456789012/reports/*"
+      ]
+    }
+  ]
+}

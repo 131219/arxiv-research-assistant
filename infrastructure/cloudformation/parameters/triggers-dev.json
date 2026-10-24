@@ -1,0 +1,30 @@
+[
+  {
+    "ParameterKey": "Environment",
+    "ParameterValue": "dev"
+  },
+  {
+    "ParameterKey": "ProjectName",
+    "ParameterValue": "arxiv"
+  },
+  {
+    "ParameterKey": "ScheduleState",
+    "ParameterValue": "DISABLED"
+  },
+  {
+    "ParameterKey": "ScheduleExpression",
+    "ParameterValue": "cron(0 2 1 * ? *)"
+  },
+  {
+    "ParameterKey": "ScheduleTimezone",
+    "ParameterValue": "America/Los_Angeles"
+  },
+  {
+    "ParameterKey": "MaxConcurrency",
+    "ParameterValue": "10"
+  },
+  {
+    "ParameterKey": "NotificationEmail",
+    "ParameterValue": "alerts@example.com"
+  }
+]

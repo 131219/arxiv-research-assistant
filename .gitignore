@@ -1,0 +1,78 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Environment and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+.aws/
+
+# AWS / infrastructure
+.terraform/
+terraform.tfstate
+terraform.tfstate.*
+cdk.out/
+
+# Local data
+data/
+downloads/
+output/
+*.tar
+*.tar.gz
+*.pdf
+
+# IDE / OS
+.DS_Store
+.idea/
+.vscode/
+*.egg-info/
+
+# Generated manifest files
+manifest.jsonl
+data/manifests/
+
+# Generated AWS deployment files
+job-definition-v*.json
+*-test-input.json
+distributed-map-*.json
+distributed-map-*.jsonl
+*-run-summary.json
+
+# Local generated manifests and data
+manifest.jsonl
+data/
+*.tar
+*.pdf
+
+# macOS and Python cache
+.DS_Store
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Python build artifacts
+build/
+__pycache__/
+*.pyc
+
+# Lambda deployment packages
+infrastructure/lambda/manifest_parser/*.zip
+
+# Temporary CloudFormation backups
+*.yaml.backup
+infrastructure/lambda/**/*.zip
+
+# Local IAM deployment policy files
+github-actions-trust-policy.json
+github-actions-deploy-policy.json
+cloudformation-deploy-trust-policy.json
+cloudformation-deploy-policy.json
+infrastructure/cloudformation/templates/processing.yaml.bak

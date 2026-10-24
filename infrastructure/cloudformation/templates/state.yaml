@@ -1,0 +1,151 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: >
+  Persistent archive processing state for the arXiv ingestion pipeline.
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - test
+      - prod
+
+  ProjectName:
+    Type: String
+    Default: arxiv
+
+Resources:
+  ArchiveProcessingTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "${ProjectName}-archive-processing-${Environment}"
+
+      BillingMode: PAY_PER_REQUEST
+
+      AttributeDefinitions:
+        - AttributeName: archive_id
+          AttributeType: S
+
+      KeySchema:
+        - AttributeName: archive_id
+          KeyType: HASH
+
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+
+      SSESpecification:
+        SSEEnabled: true
+
+      Tags:
+        - Key: Project
+          Value: arxiv-bedrock-kb-pipeline
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  ConversationTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "${ProjectName}-conversations-${Environment}"
+
+      BillingMode: PAY_PER_REQUEST
+
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+        - AttributeName: sk
+          AttributeType: S
+
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+        - AttributeName: sk
+          KeyType: RANGE
+
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+
+      SSESpecification:
+        SSEEnabled: true
+
+      Tags:
+        - Key: Project
+          Value: arxiv-bedrock-kb-pipeline
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  ResearchRateLimitTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "${ProjectName}-research-rate-limit-${Environment}"
+
+      BillingMode: PAY_PER_REQUEST
+
+      AttributeDefinitions:
+        - AttributeName: rate_key
+          AttributeType: S
+
+      KeySchema:
+        - AttributeName: rate_key
+          KeyType: HASH
+
+      TimeToLiveSpecification:
+        AttributeName: expires_at
+        Enabled: true
+
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+
+      SSESpecification:
+        SSEEnabled: true
+
+      Tags:
+        - Key: Project
+          Value: arxiv-bedrock-kb-pipeline
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: CloudFormation
+
+Outputs:
+  ArchiveProcessingTableName:
+    Description: DynamoDB table containing archive processing state.
+    Value: !Ref ArchiveProcessingTable
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-archive-processing-table-name"
+
+  ArchiveProcessingTableArn:
+    Description: ARN of the archive processing DynamoDB table.
+    Value: !GetAtt ArchiveProcessingTable.Arn
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-archive-processing-table-arn"
+
+
+  ConversationTableName:
+    Description: DynamoDB table containing research conversations.
+    Value: !Ref ConversationTable
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-conversation-table-name"
+
+  ConversationTableArn:
+    Description: ARN of the research conversation DynamoDB table.
+    Value: !GetAtt ConversationTable.Arn
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-conversation-table-arn"
+
+  ResearchRateLimitTableName:
+    Description: DynamoDB table containing research API rate-limit counters.
+    Value: !Ref ResearchRateLimitTable
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-research-rate-limit-table-name"
+
+  ResearchRateLimitTableArn:
+    Description: ARN of the research API rate-limit DynamoDB table.
+    Value: !GetAtt ResearchRateLimitTable.Arn
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-research-rate-limit-table-arn"

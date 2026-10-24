@@ -1,0 +1,14 @@
+{
+  "source": ["aws.states"],
+  "detail-type": ["Step Functions Execution Status Change"],
+  "detail": {
+    "status": [
+      "FAILED",
+      "TIMED_OUT",
+      "ABORTED"
+    ],
+    "stateMachineArn": [
+      "arn:aws:states:us-east-1:123456789012:stateMachine:arxiv-ingestion-pipeline"
+    ]
+  }
+}

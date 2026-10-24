@@ -1,0 +1,392 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: >
+  CloudWatch alarms and dashboard for the arXiv ingestion pipeline.
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - test
+      - prod
+
+  ProjectName:
+    Type: String
+    Default: arxiv
+
+Resources:
+
+  # ------------------------------------------------------------
+  # Step Functions alarms
+  # ------------------------------------------------------------
+
+  StateMachineFailedAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-workflow-failed-${Environment}"
+      AlarmDescription: >
+        Alerts when an arXiv ingestion Step Functions execution fails.
+      Namespace: AWS/States
+      MetricName: ExecutionsFailed
+      Dimensions:
+        - Name: StateMachineArn
+          Value:
+            Fn::ImportValue:
+              Fn::Sub: "${ProjectName}-${Environment}-state-machine-arn"
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - Fn::ImportValue:
+            Fn::Sub: "${ProjectName}-${Environment}-notification-topic-arn"
+
+  StateMachineTimedOutAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-workflow-timeout-${Environment}"
+      AlarmDescription: >
+        Alerts when an arXiv ingestion Step Functions execution times out.
+      Namespace: AWS/States
+      MetricName: ExecutionsTimedOut
+      Dimensions:
+        - Name: StateMachineArn
+          Value:
+            Fn::ImportValue:
+              Fn::Sub: "${ProjectName}-${Environment}-state-machine-arn"
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - Fn::ImportValue:
+            Fn::Sub: "${ProjectName}-${Environment}-notification-topic-arn"
+
+  StateMachineAbortedAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-workflow-aborted-${Environment}"
+      AlarmDescription: >
+        Alerts when an arXiv ingestion Step Functions execution is aborted.
+      Namespace: AWS/States
+      MetricName: ExecutionsAborted
+      Dimensions:
+        - Name: StateMachineArn
+          Value:
+            Fn::ImportValue:
+              Fn::Sub: "${ProjectName}-${Environment}-state-machine-arn"
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - Fn::ImportValue:
+            Fn::Sub: "${ProjectName}-${Environment}-notification-topic-arn"
+
+  # ------------------------------------------------------------
+  # Lambda error alarms
+  # ------------------------------------------------------------
+
+  ManifestParserErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-manifest-parser-errors-${Environment}"
+      AlarmDescription: >
+        Alerts when the manifest-parser Lambda reports an error.
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Sub "${ProjectName}-manifest-parser-${Environment}"
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - Fn::ImportValue:
+            Fn::Sub: "${ProjectName}-${Environment}-notification-topic-arn"
+
+  ValidateOutputsErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-validate-outputs-errors-${Environment}"
+      AlarmDescription: >
+        Alerts when the centralized output validator Lambda reports an error.
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Sub "${ProjectName}-validate-outputs-${Environment}"
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - Fn::ImportValue:
+            Fn::Sub: "${ProjectName}-${Environment}-notification-topic-arn"
+
+  RunSummaryErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-run-summary-errors-${Environment}"
+      AlarmDescription: >
+        Alerts when the run-summary Lambda reports an error.
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Sub "${ProjectName}-run-summary-writer-${Environment}"
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - Fn::ImportValue:
+            Fn::Sub: "${ProjectName}-${Environment}-notification-topic-arn"
+
+  # ------------------------------------------------------------
+  # Lambda throttling alarms
+  # ------------------------------------------------------------
+
+  ManifestParserThrottlesAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-manifest-parser-throttles-${Environment}"
+      Namespace: AWS/Lambda
+      MetricName: Throttles
+      Dimensions:
+        - Name: FunctionName
+          Value: !Sub "${ProjectName}-manifest-parser-${Environment}"
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - Fn::ImportValue:
+            Fn::Sub: "${ProjectName}-${Environment}-notification-topic-arn"
+
+  ValidateOutputsThrottlesAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-validate-outputs-throttles-${Environment}"
+      Namespace: AWS/Lambda
+      MetricName: Throttles
+      Dimensions:
+        - Name: FunctionName
+          Value: !Sub "${ProjectName}-validate-outputs-${Environment}"
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - Fn::ImportValue:
+            Fn::Sub: "${ProjectName}-${Environment}-notification-topic-arn"
+
+  RunSummaryThrottlesAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-run-summary-throttles-${Environment}"
+      Namespace: AWS/Lambda
+      MetricName: Throttles
+      Dimensions:
+        - Name: FunctionName
+          Value: !Sub "${ProjectName}-run-summary-writer-${Environment}"
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - Fn::ImportValue:
+            Fn::Sub: "${ProjectName}-${Environment}-notification-topic-arn"
+
+  # ------------------------------------------------------------
+  # CloudWatch dashboard
+  # ------------------------------------------------------------
+
+  PipelineDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Sub "${ProjectName}-pipeline-${Environment}"
+      DashboardBody:
+        Fn::Sub:
+          - |
+            {
+              "widgets": [
+                {
+                  "type": "metric",
+                  "x": 0,
+                  "y": 0,
+                  "width": 12,
+                  "height": 6,
+                  "properties": {
+                    "title": "Step Functions Executions",
+                    "region": "${AWS::Region}",
+                    "period": 300,
+                    "stat": "Sum",
+                    "metrics": [
+                      [
+                        "AWS/States",
+                        "ExecutionsStarted",
+                        "StateMachineArn",
+                        "${StateMachineArn}"
+                      ],
+                      [
+                        ".",
+                        "ExecutionsSucceeded",
+                        ".",
+                        "."
+                      ],
+                      [
+                        ".",
+                        "ExecutionsFailed",
+                        ".",
+                        "."
+                      ],
+                      [
+                        ".",
+                        "ExecutionsTimedOut",
+                        ".",
+                        "."
+                      ]
+                    ]
+                  }
+                },
+                {
+                  "type": "metric",
+                  "x": 12,
+                  "y": 0,
+                  "width": 12,
+                  "height": 6,
+                  "properties": {
+                    "title": "Lambda Errors",
+                    "region": "${AWS::Region}",
+                    "period": 300,
+                    "stat": "Sum",
+                    "metrics": [
+                      [
+                        "AWS/Lambda",
+                        "Errors",
+                        "FunctionName",
+                        "${ProjectName}-manifest-parser-${Environment}"
+                      ],
+                      [
+                        ".",
+                        ".",
+                        ".",
+                        "${ProjectName}-validate-outputs-${Environment}"
+                      ],
+                      [
+                        ".",
+                        ".",
+                        ".",
+                        "${ProjectName}-run-summary-writer-${Environment}"
+                      ]
+                    ]
+                  }
+                },
+                {
+                  "type": "metric",
+                  "x": 0,
+                  "y": 6,
+                  "width": 12,
+                  "height": 6,
+                  "properties": {
+                    "title": "Lambda Duration",
+                    "region": "${AWS::Region}",
+                    "period": 300,
+                    "stat": "Average",
+                    "metrics": [
+                      [
+                        "AWS/Lambda",
+                        "Duration",
+                        "FunctionName",
+                        "${ProjectName}-manifest-parser-${Environment}"
+                      ],
+                      [
+                        ".",
+                        ".",
+                        ".",
+                        "${ProjectName}-validate-outputs-${Environment}"
+                      ],
+                      [
+                        ".",
+                        ".",
+                        ".",
+                        "${ProjectName}-run-summary-writer-${Environment}"
+                      ]
+                    ]
+                  }
+                },
+                {
+                  "type": "metric",
+                  "x": 12,
+                  "y": 6,
+                  "width": 12,
+                  "height": 6,
+                  "properties": {
+                    "title": "Lambda Throttles",
+                    "region": "${AWS::Region}",
+                    "period": 300,
+                    "stat": "Sum",
+                    "metrics": [
+                      [
+                        "AWS/Lambda",
+                        "Throttles",
+                        "FunctionName",
+                        "${ProjectName}-manifest-parser-${Environment}"
+                      ],
+                      [
+                        ".",
+                        ".",
+                        ".",
+                        "${ProjectName}-validate-outputs-${Environment}"
+                      ],
+                      [
+                        ".",
+                        ".",
+                        ".",
+                        "${ProjectName}-run-summary-writer-${Environment}"
+                      ]
+                    ]
+                  }
+                }
+              ]
+            }
+          - StateMachineArn:
+              Fn::ImportValue:
+                Fn::Sub: "${ProjectName}-${Environment}-state-machine-arn"
+
+Outputs:
+  DashboardName:
+    Description: CloudWatch dashboard for the arXiv pipeline.
+    Value: !Ref PipelineDashboard
+
+  StateMachineFailedAlarmName:
+    Description: CloudWatch alarm for failed workflow executions.
+    Value: !Ref StateMachineFailedAlarm

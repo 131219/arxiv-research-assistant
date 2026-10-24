@@ -1,0 +1,419 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: >
+  Private-beta website API infrastructure for the arXiv Research Assistant.
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - test
+      - prod
+
+  ProjectName:
+    Type: String
+    Default: arxiv
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+
+  PublicSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+
+  KnowledgeBaseId:
+    Type: String
+
+  SynthesisModelId:
+    Type: String
+    Default: us.amazon.nova-2-lite-v1:0
+
+  CognitoUserPoolId:
+    Type: String
+
+  CognitoAppClientId:
+    Type: String
+
+  ImageTag:
+    Type: String
+    Default: latest
+
+  CloudFrontOriginFacingPrefixListId:
+    Type: String
+    Description: AWS-managed prefix list ID for CloudFront origin-facing servers.
+
+  DesiredCount:
+    Type: Number
+    Default: 1
+    MinValue: 0
+    MaxValue: 10
+
+Resources:
+  ApiRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub "${ProjectName}-website-api-${Environment}"
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      ImageTagMutability: IMMUTABLE
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Retain the 20 most recent images",
+                "selection": {
+                  "tagStatus": "any",
+                  "countType": "imageCountMoreThan",
+                  "countNumber": 20
+                },
+                "action": {
+                  "type": "expire"
+                }
+              }
+            ]
+          }
+      Tags:
+        - Key: Project
+          Value: arxiv-bedrock-kb-pipeline
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  ApiLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/arxiv-website-api/${Environment}"
+      RetentionInDays: 30
+      Tags:
+        - Key: Project
+          Value: arxiv-bedrock-kb-pipeline
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  ApiCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub "${ProjectName}-website-api-cluster-${Environment}"
+      ClusterSettings:
+        - Name: containerInsights
+          Value: enabled
+      Tags:
+        - Key: Project
+          Value: arxiv-bedrock-kb-pipeline
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  ApiExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-website-api-execution-${Environment}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ecs-tasks.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Tags:
+        - Key: Project
+          Value: arxiv-bedrock-kb-pipeline
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  ApiTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-website-api-task-${Environment}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ecs-tasks.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: !Sub "${ProjectName}-website-api-runtime-${Environment}"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: RetrieveFromKnowledgeBase
+                Effect: Allow
+                Action:
+                  - bedrock:Retrieve
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:knowledge-base/${KnowledgeBaseId}"
+
+              - Sid: InvokeSynthesisModel
+                Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                  - bedrock:GetInferenceProfile
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:bedrock:*::foundation-model/amazon.nova-2-lite-v1:0"
+                  - !Sub "arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/${SynthesisModelId}"
+
+              - Sid: ConversationTable
+                Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:Query
+                Resource:
+                  Fn::ImportValue:
+                    !Sub "${ProjectName}-${Environment}-conversation-table-arn"
+
+              - Sid: RateLimitTable
+                Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                Resource:
+                  Fn::ImportValue:
+                    !Sub "${ProjectName}-${Environment}-research-rate-limit-table-arn"
+      Tags:
+        - Key: Project
+          Value: arxiv-bedrock-kb-pipeline
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  AlbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Public HTTP access to arXiv website API ALB
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourcePrefixListId: !Ref CloudFrontOriginFacingPrefixListId
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-website-api-alb-${Environment}"
+        - Key: Project
+          Value: arxiv-bedrock-kb-pipeline
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  ApiSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow API traffic only from website API ALB
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          SourceSecurityGroupId: !Ref AlbSecurityGroup
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-website-api-task-${Environment}"
+        - Key: Project
+          Value: arxiv-bedrock-kb-pipeline
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  ApiLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub "${ProjectName}-web-api-${Environment}"
+      Scheme: internet-facing
+      Type: application
+      SecurityGroups:
+        - !Ref AlbSecurityGroup
+      Subnets: !Ref PublicSubnetIds
+      Tags:
+        - Key: Project
+          Value: arxiv-bedrock-kb-pipeline
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  ApiTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub "${ProjectName}-web-api-${Environment}"
+      VpcId: !Ref VpcId
+      Protocol: HTTP
+      Port: 8080
+      TargetType: ip
+      HealthCheckEnabled: true
+      HealthCheckProtocol: HTTP
+      HealthCheckPath: /health
+      HealthCheckPort: traffic-port
+      Matcher:
+        HttpCode: "200"
+      Tags:
+        - Key: Project
+          Value: arxiv-bedrock-kb-pipeline
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  ApiListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ApiLoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref ApiTargetGroup
+
+  ApiTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub "${ProjectName}-website-api-${Environment}"
+      RequiresCompatibilities:
+        - FARGATE
+      NetworkMode: awsvpc
+      Cpu: "256"
+      Memory: "512"
+      ExecutionRoleArn: !GetAtt ApiExecutionRole.Arn
+      TaskRoleArn: !GetAtt ApiTaskRole.Arn
+      ContainerDefinitions:
+        - Name: website-api
+          Image: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.${AWS::URLSuffix}/${ProjectName}-website-api-${Environment}:${ImageTag}"
+          Essential: true
+          PortMappings:
+            - ContainerPort: 8080
+              Protocol: tcp
+          Environment:
+            - Name: AWS_REGION
+              Value: !Ref AWS::Region
+
+            - Name: BEDROCK_KNOWLEDGE_BASE_ID
+              Value: !Ref KnowledgeBaseId
+
+            - Name: BEDROCK_SYNTHESIS_MODEL_ID
+              Value: !Ref SynthesisModelId
+
+            - Name: COGNITO_USER_POOL_ID
+              Value: !Ref CognitoUserPoolId
+
+            - Name: COGNITO_APP_CLIENT_ID
+              Value: !Ref CognitoAppClientId
+
+            - Name: CONVERSATION_TABLE_NAME
+              Value:
+                Fn::ImportValue:
+                  !Sub "${ProjectName}-${Environment}-conversation-table-name"
+
+            - Name: RESEARCH_RATE_LIMIT_TABLE_NAME
+              Value:
+                Fn::ImportValue:
+                  !Sub "${ProjectName}-${Environment}-research-rate-limit-table-name"
+
+            - Name: RESEARCH_RATE_LIMIT_MAX_REQUESTS
+              Value: "10"
+
+            - Name: RESEARCH_RATE_LIMIT_WINDOW_SECONDS
+              Value: "60"
+
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref ApiLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: api
+
+      Tags:
+        - Key: Project
+          Value: arxiv-bedrock-kb-pipeline
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  ApiService:
+    Type: AWS::ECS::Service
+    DependsOn:
+      - ApiListener
+    Properties:
+      ServiceName: !Sub "${ProjectName}-website-api-service-${Environment}"
+      Cluster: !Ref ApiCluster
+      TaskDefinition: !Ref ApiTaskDefinition
+      DesiredCount: !Ref DesiredCount
+      LaunchType: FARGATE
+      PlatformVersion: LATEST
+      HealthCheckGracePeriodSeconds: 60
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 100
+        MaximumPercent: 200
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          SecurityGroups:
+            - !Ref ApiSecurityGroup
+          Subnets: !Ref PublicSubnetIds
+      LoadBalancers:
+        - ContainerName: website-api
+          ContainerPort: 8080
+          TargetGroupArn: !Ref ApiTargetGroup
+      Tags:
+        - Key: Project
+          Value: arxiv-bedrock-kb-pipeline
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: CloudFormation
+
+Outputs:
+  ApiRepositoryName:
+    Description: ECR repository for website API images.
+    Value: !Ref ApiRepository
+
+  ApiRepositoryUri:
+    Description: ECR repository URI for website API images.
+    Value: !GetAtt ApiRepository.RepositoryUri
+
+  ApiClusterName:
+    Description: ECS cluster hosting the website API.
+    Value: !Ref ApiCluster
+
+  ApiServiceName:
+    Description: ECS service hosting the website API.
+    Value: !GetAtt ApiService.Name
+
+  ApiLoadBalancerDnsName:
+    Description: Public DNS name of the website API load balancer.
+    Value: !GetAtt ApiLoadBalancer.DNSName
+
+  ApiTargetGroupArn:
+    Description: Target group used by the website API ECS service.
+    Value: !Ref ApiTargetGroup
+
+  ApiTaskRoleArn:
+    Description: IAM role used by the website API application.
+    Value: !GetAtt ApiTaskRole.Arn

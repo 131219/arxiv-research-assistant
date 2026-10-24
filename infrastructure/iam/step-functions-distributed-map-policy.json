@@ -1,0 +1,35 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReadDistributedMapManifests",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject"
+      ],
+      "Resource": [
+        "arn:aws:s3:::arxiv-bedrock-kb-123456789012/orchestration/manifests/*"
+      ]
+    },
+    {
+      "Sid": "StartDistributedMapChildren",
+      "Effect": "Allow",
+      "Action": [
+        "states:StartExecution"
+      ],
+      "Resource": [
+        "arn:aws:states:us-east-1:123456789012:stateMachine:arxiv-ingestion-pipeline"
+      ]
+    },
+    {
+      "Sid": "DescribeDistributedMapChildren",
+      "Effect": "Allow",
+      "Action": [
+        "states:DescribeExecution"
+      ],
+      "Resource": [
+        "arn:aws:states:us-east-1:123456789012:execution:arxiv-ingestion-pipeline:*"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,30 @@
+[
+  {
+    "ParameterKey": "Environment",
+    "ParameterValue": "dev"
+  },
+  {
+    "ParameterKey": "ProjectName",
+    "ParameterValue": "arxiv"
+  },
+  {
+    "ParameterKey": "RunSummaryCodeS3Key",
+    "ParameterValue": "artifacts/lambda/run-summary-writer.zip"
+  },
+  {
+    "ParameterKey": "ManifestParserCodeS3Key",
+    "ParameterValue": "artifacts/lambda/manifest-parser-scheduler-v1.zip"
+  },
+  {
+    "ParameterKey": "KnowledgeBaseId",
+    "ParameterValue": "YOUR_KB_ID"
+  },
+  {
+    "ParameterKey": "DataSourceId",
+    "ParameterValue": "YOUR_DATA_SOURCE_ID"
+  },
+  {
+    "ParameterKey": "ValidateOutputsCodeS3Key",
+    "ParameterValue": "artifacts/lambda/validate-outputs-v1.zip"
+  }
+]

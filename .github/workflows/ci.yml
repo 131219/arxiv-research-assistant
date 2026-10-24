@@ -1,0 +1,206 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test and Validate
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install project and development dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Install API and MCP dependencies
+        run: |
+          pip install -r requirements-api.txt
+
+      - name: Ruff check
+        run: |
+          ruff check src tests infrastructure/lambda
+
+      - name: Run tests
+        run: |
+          python -m pytest -q
+
+      - name: Validate Python syntax
+        run: |
+          python -m compileall -q src infrastructure/lambda
+
+      - name: Validate CloudFormation templates
+        run: |
+          cfn-lint infrastructure/cloudformation/templates/*.yaml
+
+      - name: Build ingestion Docker image
+        run: |
+          docker build \
+            -t arxiv-pipeline-ci:${{ github.sha }} \
+            -f Dockerfile \
+            .
+
+      - name: Build API Docker image
+        run: |
+          docker build \
+            -t arxiv-api-ci:${{ github.sha }} \
+            -f Dockerfile.api \
+            .
+
+  deploy-image:
+    name: Build and Push Ingestion Image
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.AWS_ACCOUNT_ID != ''
+    needs: test
+    runs-on: ubuntu-latest
+
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/arxiv-github-deploy-dev
+          aws-region: us-east-1
+
+      - name: Verify AWS identity
+        run: |
+          aws sts get-caller-identity
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push ingestion image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: arxiv-pipeline-dev
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          if aws ecr describe-images \
+            --repository-name "$ECR_REPOSITORY" \
+            --image-ids imageTag="$IMAGE_TAG" \
+            --region us-east-1 \
+            >/dev/null 2>&1
+          then
+            echo "Image already exists:"
+            echo "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+            echo "Reusing immutable image."
+          else
+            docker build \
+              -t "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" \
+              -f Dockerfile \
+              .
+
+            docker push \
+              "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+
+            echo "Pushed:"
+            echo "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+          fi
+
+      - name: Deploy state stack
+        run: |
+          PARAMS=$(jq -r '
+            .[]
+            | "\(.ParameterKey)=\(.ParameterValue)"
+          ' infrastructure/cloudformation/parameters/state-dev.json)
+
+          aws cloudformation deploy \
+            --stack-name arxiv-state-dev \
+            --template-file infrastructure/cloudformation/templates/state.yaml \
+            --role-arn arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/arxiv-cloudformation-deploy-dev \
+            --parameter-overrides $PARAMS \
+            --no-fail-on-empty-changeset \
+            --region us-east-1
+
+      - name: Deploy processing stack
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          PARAMS=$(jq -r '
+            .[]
+            | select(.ParameterKey != "ImageTag")
+            | "\(.ParameterKey)=\(.ParameterValue)"
+          ' infrastructure/cloudformation/parameters/processing-dev.json)
+
+          aws cloudformation deploy \
+            --stack-name arxiv-processing-dev \
+            --template-file infrastructure/cloudformation/templates/processing.yaml \
+            --role-arn arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/arxiv-cloudformation-deploy-dev \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --parameter-overrides \
+              $PARAMS \
+              ImageTag="$IMAGE_TAG" \
+            --no-fail-on-empty-changeset \
+            --region us-east-1
+
+      - name: Deploy workflow stack
+        run: |
+          PARAMS=$(jq -r '
+            .[]
+            | "\(.ParameterKey)=\(.ParameterValue)"
+          ' infrastructure/cloudformation/parameters/workflow-dev.json)
+
+          aws cloudformation deploy \
+            --stack-name arxiv-workflow-dev \
+            --template-file infrastructure/cloudformation/templates/workflow.yaml \
+            --role-arn arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/arxiv-cloudformation-deploy-dev \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --parameter-overrides $PARAMS \
+            --no-fail-on-empty-changeset \
+            --region us-east-1
+
+      - name: Verify deployed Batch image
+        env:
+          EXPECTED_TAG: ${{ github.sha }}
+        run: |
+          DEPLOYED_IMAGE=$(aws batch describe-job-definitions \
+            --job-definition-name arxiv-pipeline-job-dev \
+            --status ACTIVE \
+            --region us-east-1 \
+            --query 'sort_by(jobDefinitions,&revision)[-1].containerProperties.image' \
+            --output text)
+
+          PROCESSOR_VERSION=$(aws batch describe-job-definitions \
+            --job-definition-name arxiv-pipeline-job-dev \
+            --status ACTIVE \
+            --region us-east-1 \
+            --query 'sort_by(jobDefinitions,&revision)[-1].containerProperties.environment[?name==`PROCESSOR_VERSION`].value | [0]' \
+            --output text)
+
+          echo "Expected tag:      $EXPECTED_TAG"
+          echo "Deployed image:    $DEPLOYED_IMAGE"
+          echo "Processor version: $PROCESSOR_VERSION"
+
+          if [[ "$DEPLOYED_IMAGE" != *":$EXPECTED_TAG" ]]; then
+            echo "ERROR: Batch image does not match GitHub SHA."
+            exit 1
+          fi
+
+          if [[ "$PROCESSOR_VERSION" != "$EXPECTED_TAG" ]]; then
+            echo "ERROR: PROCESSOR_VERSION does not match GitHub SHA."
+            exit 1
+          fi
+
+          echo "Deployment verification passed."

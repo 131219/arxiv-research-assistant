@@ -1,0 +1,244 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: >
+  EventBridge Scheduler and workflow status notifications for the
+  arXiv ingestion pipeline.
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - test
+      - prod
+
+  ProjectName:
+    Type: String
+    Default: arxiv
+
+  ScheduleState:
+    Type: String
+    Default: DISABLED
+    AllowedValues:
+      - ENABLED
+      - DISABLED
+    Description: >
+      Keep DISABLED until the scheduled ingestion input has been reviewed.
+
+  ScheduleExpression:
+    Type: String
+    Default: "cron(0 2 1 * ? *)"
+    Description: >
+      EventBridge Scheduler expression. Default runs at 02:00
+      in the configured schedule timezone on the first day of every month.
+
+  ScheduleTimezone:
+    Type: String
+    Default: America/Los_Angeles
+
+  MaxConcurrency:
+    Type: Number
+    Default: 10
+    MinValue: 1
+
+  NotificationEmail:
+    Type: String
+    Default: ""
+    Description: Email address that receives pipeline status notifications.
+
+Conditions:
+  HasNotificationEmail: !Not
+    - !Equals
+      - !Ref NotificationEmail
+      - ""
+
+Resources:
+  SchedulerExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-scheduler-role-${Environment}"
+
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - scheduler.amazonaws.com
+            Action:
+              - sts:AssumeRole
+
+      Policies:
+        - PolicyName: StartIngestionStateMachine
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: StartStateMachine
+                Effect: Allow
+                Action:
+                  - states:StartExecution
+                Resource:
+                  Fn::ImportValue:
+                    Fn::Sub: "${ProjectName}-${Environment}-state-machine-arn"
+
+      Tags:
+        - Key: Project
+          Value: arxiv-pipeline
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  MonthlyIngestionSchedule:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      Name: !Sub "${ProjectName}-monthly-ingestion-${Environment}"
+      Description: Starts the arXiv ingestion Step Functions workflow.
+      State: !Ref ScheduleState
+      ScheduleExpression: !Ref ScheduleExpression
+      ScheduleExpressionTimezone: !Ref ScheduleTimezone
+      FlexibleTimeWindow:
+        Mode: "OFF"
+
+      Target:
+        Arn:
+          Fn::ImportValue:
+            Fn::Sub: "${ProjectName}-${Environment}-state-machine-arn"
+
+        RoleArn: !GetAtt SchedulerExecutionRole.Arn
+
+        Input:
+          Fn::Sub:
+            - |
+              {
+                "skip_completed": true,
+                "max_concurrency": ${Concurrency},
+                "output_bucket": "${CorpusBucket}"
+              }
+            - Concurrency: !Ref MaxConcurrency
+              CorpusBucket:
+                Fn::ImportValue:
+                  Fn::Sub: "${ProjectName}-${Environment}-corpus-bucket-name"
+
+        RetryPolicy:
+          MaximumEventAgeInSeconds: 3600
+          MaximumRetryAttempts: 2
+
+  WorkflowStatusRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "${ProjectName}-workflow-status-${Environment}"
+      Description: Publishes terminal Step Functions execution statuses to SNS.
+      State: ENABLED
+
+      EventPattern:
+        source:
+          - aws.states
+        detail-type:
+          - Step Functions Execution Status Change
+        detail:
+          stateMachineArn:
+            - Fn::ImportValue:
+                Fn::Sub: "${ProjectName}-${Environment}-state-machine-arn"
+          status:
+            - SUCCEEDED
+            - FAILED
+            - TIMED_OUT
+            - ABORTED
+
+      Targets:
+        - Id: PipelineNotificationTopic
+          Arn:
+            Fn::ImportValue:
+              Fn::Sub: "${ProjectName}-${Environment}-notification-topic-arn"
+
+  PipelineEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasNotificationEmail
+    Properties:
+      Protocol: email
+      Endpoint: !Ref NotificationEmail
+      TopicArn:
+        Fn::ImportValue:
+          Fn::Sub: "${ProjectName}-${Environment}-notification-topic-arn"
+
+  BatchJobFailureRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "${ProjectName}-batch-job-failed-${Environment}"
+      Description: Publishes failed arXiv AWS Batch jobs to SNS.
+      State: ENABLED
+
+      EventPattern:
+        source:
+          - aws.batch
+        detail-type:
+          - Batch Job State Change
+        detail:
+          status:
+            - FAILED
+          jobQueue:
+            - Fn::ImportValue:
+                Fn::Sub: "${ProjectName}-${Environment}-batch-job-queue-arn"
+
+      Targets:
+        - Id: BatchFailureNotificationTopic
+          Arn:
+            Fn::ImportValue:
+              Fn::Sub: "${ProjectName}-${Environment}-notification-topic-arn"
+
+  NotificationTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      Topics:
+        - Fn::ImportValue:
+            Fn::Sub: "${ProjectName}-${Environment}-notification-topic-arn"
+
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowWorkflowStatusEventBridgePublish
+            Effect: Allow
+            Principal:
+              Service:
+                - events.amazonaws.com
+            Action:
+              - sns:Publish
+            Resource:
+              Fn::ImportValue:
+                Fn::Sub: "${ProjectName}-${Environment}-notification-topic-arn"
+            Condition:
+              ArnEquals:
+                aws:SourceArn: !GetAtt WorkflowStatusRule.Arn
+
+          - Sid: AllowBatchFailureEventBridgePublish
+            Effect: Allow
+            Principal:
+              Service:
+                - events.amazonaws.com
+            Action:
+              - sns:Publish
+            Resource:
+              Fn::ImportValue:
+                Fn::Sub: "${ProjectName}-${Environment}-notification-topic-arn"
+            Condition:
+              ArnEquals:
+                aws:SourceArn: !GetAtt BatchJobFailureRule.Arn
+
+Outputs:
+  SchedulerRoleArn:
+    Description: IAM role used by EventBridge Scheduler.
+    Value: !GetAtt SchedulerExecutionRole.Arn
+
+  ScheduleArn:
+    Description: ARN of the ingestion schedule.
+    Value: !GetAtt MonthlyIngestionSchedule.Arn
+
+  WorkflowStatusRuleArn:
+    Description: ARN of the workflow status EventBridge rule.
+    Value: !GetAtt WorkflowStatusRule.Arn
+
+  BatchJobFailureRuleArn:
+    Description: ARN of the AWS Batch failure EventBridge rule.
+    Value: !GetAtt BatchJobFailureRule.Arn
