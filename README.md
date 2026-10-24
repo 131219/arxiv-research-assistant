@@ -1,5 +1,7 @@
 # arXiv Research Assistant
 
+[![CI](https://github.com/131219/arxiv-research-assistant/actions/workflows/ci.yml/badge.svg)](https://github.com/131219/arxiv-research-assistant/actions/workflows/ci.yml)
+
 An AWS-native research assistant that turns raw arXiv PDF archives into a searchable knowledge base and answers research questions with **grounded, cited, multi-paper answers**. It is available both as a **web app** and as an **MCP server** that ChatGPT can call directly.
 
 **Current scale:** 35+ arXiv TAR archives processed, 5,000+ papers indexed in Amazon Bedrock Knowledge Bases.
